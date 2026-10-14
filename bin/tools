@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Runs a command in the tools image (PHP CLI, Composer, Node, Strauss) as the host
+# user; the workspace is writable at /workspace, caches persist in a named volume.
+#
+# Usage: bin/tools [-w <directory in the workspace>] <command>...
+set -euo pipefail
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+workdir=/workspace
+if [[ "${1-}" == "-w" ]]; then
+    [[ $# -ge 2 ]] || fail "-w needs a directory. Usage: bin/tools [-w <directory>] <command>..."
+    [[ -d "${WORKSPACE_DIR}/$2" ]] || fail "directory '$2' not found in the workspace (${WORKSPACE_DIR})."
+    workdir="/workspace/$2"
+    shift 2
+fi
+[[ $# -gt 0 ]] || fail "no command given. Usage: bin/tools [-w <directory>] <command>..."
+docker image inspect "${TOOLS_IMAGE}" >/dev/null 2>&1 || fail "image ${TOOLS_IMAGE} not found; run bin/build first."
+
+# shellcheck disable=SC2046 # docker_tty_flags prints one flag
+exec docker run --rm $(docker_tty_flags) \
+    --user "$(id -u):$(id -g)" \
+    -v "${WORKSPACE_DIR}:/workspace" \
+    -v "${TOOLS_CACHE_VOLUME}:/cache" \
+    -w "${workdir}" \
+    "${TOOLS_IMAGE}" "$@"

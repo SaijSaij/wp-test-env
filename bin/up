@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# Starts a fresh test instance (replacing one of the same name) at http://<instance>.test
+# on the Docker network wp-test-env, installs WordPress and sets it up.
+#
+# Dev mode links projects of the workspace (read-only) and activates them:
+#   bin/up <instance> --theme <dir>... [--plugin <dir>]... --activate <theme> [options]
+# Release mode installs release ZIPs, activates them (the child theme, if given) and
+# makes their directories read-only:
+#   bin/up <instance> --theme-zip <zip> [--child-theme-zip <zip>] [--plugin-zip <zip>]... [options]
+# Options of both modes:
+#   --object-cache valkey   persistent object cache (own Valkey per instance)
+#   --xdebug <mode>         XDEBUG_MODE (default off)
+#   --env NAME=value        further environment variable of the WordPress container
+set -euo pipefail
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+usage() {
+    fail "Usage: bin/up <instance> (--theme <dir>... [--plugin <dir>]... --activate <theme> | --theme-zip <zip> [--child-theme-zip <zip>] [--plugin-zip <zip>]...) [--object-cache valkey] [--xdebug <mode>] [--env NAME=value]..."
+}
+
+[[ $# -ge 1 && "$1" != -* ]] || usage
+instance="$1"
+shift
+check_instance_name "${instance}"
+
+themes=()
+plugins=()
+activate=""
+theme_zip=""
+child_zip=""
+plugin_zips=()
+object_cache=""
+xdebug=off
+env_vars=()
+while [[ $# -gt 0 ]]; do
+    [[ $# -ge 2 ]] || usage
+    case "$1" in
+        --theme) themes+=("$2") ;;
+        --plugin) plugins+=("$2") ;;
+        --activate) [[ -z "${activate}" ]] || usage; activate="$2" ;;
+        --theme-zip) [[ -z "${theme_zip}" ]] || usage; theme_zip="$2" ;;
+        --child-theme-zip) [[ -z "${child_zip}" ]] || usage; child_zip="$2" ;;
+        --plugin-zip) plugin_zips+=("$2") ;;
+        --object-cache) [[ "$2" == "valkey" ]] || fail "--object-cache supports only 'valkey'."; object_cache="$2" ;;
+        --xdebug) xdebug="$2" ;;
+        --env) [[ "$2" =~ ^[A-Z_][A-Z0-9_]*=.*$ && "$2" != *$'\n'* ]] || fail "--env needs NAME=value, got '$2'."; env_vars+=("$2") ;;
+        *) usage ;;
+    esac
+    shift 2
+done
+
+if [[ -n "${theme_zip}" ]]; then
+    mode=release
+    if (( ${#themes[@]} > 0 || ${#plugins[@]} > 0 )) || [[ -n "${activate}" ]]; then
+        fail "release mode (--theme-zip) cannot be combined with --theme, --plugin or --activate."
+    fi
+    zips=("${theme_zip}")
+    [[ -z "${child_zip}" ]] || zips+=("${child_zip}")
+    zips+=("${plugin_zips[@]}")
+    for zip in "${zips[@]}"; do
+        [[ -f "${zip}" ]] || fail "release ZIP '${zip}' not found."
+    done
+else
+    mode=dev
+    if [[ -n "${child_zip}" ]] || (( ${#plugin_zips[@]} > 0 )); then
+        fail "--child-theme-zip and --plugin-zip need --theme-zip."
+    fi
+    if (( ${#themes[@]} == 0 )) || [[ -z "${activate}" ]]; then
+        fail "dev mode needs --theme and --activate."
+    fi
+    for project in "${themes[@]}" "${plugins[@]}"; do
+        [[ "${project}" =~ ^[^/,]+$ && -d "${WORKSPACE_DIR}/${project}" ]] || fail "project '${project}' not found in the workspace (${WORKSPACE_DIR})."
+    done
+    [[ " ${themes[*]} " == *" ${activate} "* ]] || fail "--activate '${activate}' is not one of the --theme projects."
+fi
+
+docker image inspect "${WORDPRESS_IMAGE}" >/dev/null 2>&1 || fail "image ${WORDPRESS_IMAGE} not found; run bin/build first."
+ensure_network
+
+# Replace an instance of the same name, including one whose state is gone.
+project="$(instance_project "${instance}")"
+if [[ -n "$(docker ps -aq --filter "label=com.docker.compose.project=${project}")" ]]; then
+    docker compose -p "${project}" down --volumes --remove-orphans --timeout 1 >/dev/null 2>&1 \
+        || fail "cannot remove the existing instance ${instance} (Compose project ${project})."
+fi
+
+state="$(instance_state "${instance}")"
+rm -rf "${state}"
+mkdir -p "${state}/release"
+echo "${mode}" > "${state}/mode"
+join() {
+    local IFS=,
+    echo "$*"
+}
+{
+    echo "WP_TEST_INSTANCE=${instance}"
+    echo "WP_TEST_HOST=$(instance_host "${instance}")"
+    echo "WP_TEST_STATE=${state}"
+    echo "WORKSPACE_DIR=${WORKSPACE_DIR}"
+    echo "WP_THEMES=$(join "${themes[@]}")"
+    echo "WP_PLUGINS=$(join "${plugins[@]}")"
+    echo "WP_OBJECT_CACHE=${object_cache}"
+    echo "XDEBUG_MODE=${xdebug}"
+} > "${state}/compose.env"
+printf '%s\n' "${env_vars[@]}" > "${state}/wordpress.env"
+if [[ "${mode}" == "release" ]]; then
+    for zip in "${zips[@]}"; do
+        cp "${zip}" "${state}/release/"
+    done
+fi
+
+profile=()
+[[ -z "${object_cache}" ]] || profile=(--profile objectcache)
+instance_compose "${instance}" "${profile[@]}" up -d --wait --quiet-pull
+
+container="$(instance_container "${instance}")"
+url="$(instance_url "${instance}")"
+if ! docker exec "${container}" curl -fsS -o /dev/null "${url}/readme.html"; then
+    fail "${url} is not reachable from inside ${container}, so WP-Cron and other loopback requests fail."
+fi
+
+wp() {
+    docker exec -i -u www-data -e PAGER=cat "${container}" wp "$@"
+}
+
+wp core install --url="${url}" --title="Test ${instance}" \
+    --admin_user="${ADMIN_USER}" --admin_password="${ADMIN_PASSWORD}" --admin_email="${ADMIN_EMAIL}" \
+    --skip-email >/dev/null
+wp rewrite structure '/%postname%/' >/dev/null
+
+# Read-only like a deployment without write access: nothing may write into the installed projects.
+read_only() {
+    docker exec "${container}" chmod -R a-w "$1"
+    if docker exec -u www-data "${container}" touch "$1/.write-test" 2>/dev/null; then
+        fail "$1 is still writable for www-data."
+    fi
+}
+
+# The directory name of the theme a ZIP installed, from the theme list before and after.
+install_theme() {
+    local before installed
+    before="$(wp theme list --field=name | sort)"
+    wp theme install "/release/$(basename "$1")" >/dev/null
+    installed="$(comm -13 <(echo "${before}") <(wp theme list --field=name | sort))"
+    if [[ -z "${installed}" || "${installed}" == *$'\n'* ]]; then
+        fail "cannot tell which theme $1 installed."
+    fi
+    echo "${installed}"
+}
+
+if [[ "${mode}" == "dev" ]]; then
+    wp theme activate "${activate}" >/dev/null
+    if (( ${#plugins[@]} > 0 )); then
+        wp plugin activate "${plugins[@]}" >/dev/null
+    fi
+else
+    # The parent theme first: WordPress would try to download a missing parent theme from wordpress.org.
+    theme="$(install_theme "${theme_zip}")"
+    if [[ -n "${child_zip}" ]]; then
+        child="$(install_theme "${child_zip}")"
+        parent="$(wp theme get "${child}" --field=template)"
+        if [[ "${parent}" != "${theme}" ]]; then
+            fail "the child theme ${child} from $(basename "${child_zip}") names the parent theme '${parent}', but $(basename "${theme_zip}") installed ${theme}."
+        fi
+        wp theme activate "${child}" >/dev/null
+        read_only "/var/www/html/wp-content/themes/${child}"
+    else
+        wp theme activate "${theme}" >/dev/null
+    fi
+    read_only "/var/www/html/wp-content/themes/${theme}"
+    for zip in "${plugin_zips[@]}"; do
+        before="$(wp plugin list --field=name | sort)"
+        wp plugin install "/release/$(basename "${zip}")" --activate >/dev/null
+        plugin="$(comm -13 <(echo "${before}") <(wp plugin list --field=name | sort))"
+        if [[ -z "${plugin}" || "${plugin}" == *$'\n'* ]]; then
+            fail "cannot tell which plugin ${zip} installed."
+        fi
+        read_only "/var/www/html/wp-content/plugins/${plugin}"
+    done
+fi
+
+# Also builds the development caches of the projects before the first test.
+status="$(docker exec "${container}" curl -sS -o /dev/null -w '%{http_code}' "${url}/")"
+[[ "${status}" == "200" ]] || fail "the front page of ${url} answers HTTP ${status}."
+
+echo "${instance}: WordPress $(wp core version) at ${url} (${mode} mode)," \
+    "theme $(wp theme list --status=active --field=name)," \
+    "plugins: $(wp plugin list --status=active --field=name | paste -sd ' ' -)," \
+    "object cache: $(wp cache type)"

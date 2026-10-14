@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Builds the WordPress and tools images and pulls the service images if missing.
+# With --pull, base and service images are updated (latest stable WordPress).
+#
+# Usage: bin/build [--pull]
+set -euo pipefail
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+pull=()
+case "${1-}" in
+    '') ;;
+    --pull) pull=(--pull) ;;
+    *) fail "unknown argument '$1'. Usage: bin/build [--pull]" ;;
+esac
+
+docker build "${pull[@]}" -t "${WORDPRESS_IMAGE}" "${WP_TEST_ENV_DIR}/docker/wordpress"
+docker build "${pull[@]}" -t "${TOOLS_IMAGE}" "${WP_TEST_ENV_DIR}/docker/tools"
+
+# The service images of compose.yaml; pulled here once instead of by parallel bin/up runs.
+for image in mariadb:lts axllent/mailpit:latest valkey/valkey:9.1-alpine; do
+    if (( ${#pull[@]} > 0 )) || ! docker image inspect "${image}" >/dev/null 2>&1; then
+        docker pull --quiet "${image}"
+    fi
+done

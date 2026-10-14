@@ -1,0 +1,6 @@
+# Dev mode: the workspace is mounted read-only; the entrypoint links the projects
+# named in WP_THEMES and WP_PLUGINS into wp-content.
+services:
+  wordpress:
+    volumes:
+      - ${WORKSPACE_DIR:?}:/workspace:ro

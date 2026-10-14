@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Runs a command in the WordPress container of a test instance (default user www-data).
+#
+# Usage: bin/exec [-u <user>] [-e NAME=value]... <instance> <command>...
+set -euo pipefail
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+user=www-data
+environment=()
+while [[ "${1-}" == "-u" || "${1-}" == "-e" ]]; do
+    [[ $# -ge 2 ]] || fail "$1 needs a value."
+    if [[ "$1" == "-u" ]]; then
+        user="$2"
+    else
+        environment+=(-e "$2")
+    fi
+    shift 2
+done
+[[ $# -ge 2 ]] || fail "Usage: bin/exec [-u <user>] [-e NAME=value]... <instance> <command>..."
+instance="$1"
+shift
+require_instance "${instance}"
+
+# shellcheck disable=SC2046 # docker_tty_flags prints one flag
+exec docker exec $(docker_tty_flags) -u "${user}" "${environment[@]}" "$(instance_container "${instance}")" "$@"

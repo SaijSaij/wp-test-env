@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Prints the log of the WordPress container of a test instance (Apache and PHP, WP_DEBUG_LOG).
+#
+# Usage: bin/logs <instance> [docker logs options]...
+set -euo pipefail
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+[[ $# -ge 1 ]] || fail "Usage: bin/logs <instance> [docker logs options]..."
+instance="$1"
+shift
+check_instance_name "${instance}"
+exec docker logs "$@" "$(instance_container "${instance}")"

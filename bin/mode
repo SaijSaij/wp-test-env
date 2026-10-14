@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Prints the mode of a running test instance: dev (workspace projects) or release (release ZIPs).
+#
+# Usage: bin/mode <instance>
+set -euo pipefail
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+[[ $# -eq 1 ]] || fail "Usage: bin/mode <instance>"
+require_instance "$1"
+instance_mode "$1"

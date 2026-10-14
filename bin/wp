@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Runs WP-CLI as www-data in a test instance.
+#
+# Usage: bin/wp [-e NAME=value]... <instance> <wp arguments>...
+set -euo pipefail
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+environment=(-e PAGER=cat)
+while [[ "${1-}" == "-e" ]]; do
+    [[ $# -ge 2 ]] || fail "-e needs NAME=value."
+    environment+=(-e "$2")
+    shift 2
+done
+[[ $# -ge 1 ]] || fail "Usage: bin/wp [-e NAME=value]... <instance> <wp arguments>..."
+instance="$1"
+shift
+require_instance "${instance}"
+
+# shellcheck disable=SC2046 # docker_tty_flags prints one flag
+exec docker exec $(docker_tty_flags) -u www-data "${environment[@]}" "$(instance_container "${instance}")" wp "$@"

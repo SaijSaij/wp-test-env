@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Prints the name of the WordPress container of a running test instance, e.g. for docker cp.
+#
+# Usage: bin/container <instance>
+set -euo pipefail
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+[[ $# -eq 1 ]] || fail "Usage: bin/container <instance>"
+require_instance "$1"
+instance_container "$1"

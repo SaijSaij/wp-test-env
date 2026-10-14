@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+# Runs test pools from pool files: builds the images, prepares the projects once,
+# starts all instances in parallel, runs all pools in parallel and removes the
+# instances again (they stay with --keep). Prints a summary with the time of
+# every pool; fails if a pool fails.
+#
+# Usage: bin/run [--keep] [--skip-prepare] <pool file>...
+#
+# Pool file format: one key and its words per line; blank lines and lines starting
+# with # are ignored. Paths are relative to the workspace; commands run in the
+# workspace root.
+#
+#   prepare <project>...            bin/prepare these projects (dev mode)
+#   link <vendor/package>=<dir>     package link for bin/prepare
+#   tools <dir> <command>...        command in the tools image, after prepare (e.g. a release build)
+#   pool <name>                     starts a pool; the keys below belong to it
+#   instances <n>                   number of instances (default 1): <name>-1 … <name>-<n>
+#   themes <dir>...                 dev mode: projects linked as themes
+#   plugins <dir>...                dev mode: projects linked as plugins
+#   activate <theme>                dev mode: theme to activate
+#   theme-zip <glob>                release mode: theme ZIP
+#   child-theme-zip <glob>          release mode: child theme ZIP
+#   plugin-zip <glob>               release mode: plugin ZIP (repeatable)
+#   object-cache valkey             persistent object cache
+#   e2e <project>                   action: bin/e2e of the project on all instances of the pool
+#   run <command>...                action: command with {instance} replaced (instances 1 only)
+#
+# A ZIP glob matching several files takes the highest version (sort -V), e.g. the
+# release just built by a tools line; the choice is printed.
+set -euo pipefail
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+usage() {
+    fail "Usage: bin/run [--keep] [--skip-prepare] <pool file>..."
+}
+
+keep=false
+skip_prepare=false
+files=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --keep) keep=true ;;
+        --skip-prepare) skip_prepare=true ;;
+        -*) usage ;;
+        *) files+=("$1") ;;
+    esac
+    shift
+done
+(( ${#files[@]} > 0 )) || usage
+
+prepare_projects=()
+declare -A links=()
+tools_commands=()
+pools=()
+declare -A pool_file=() pool_instances=() pool_themes=() pool_plugins=() pool_activate=() \
+    pool_theme_zip=() pool_child_zip=() pool_plugin_zips=() pool_cache=() pool_e2e=() pool_run=()
+
+# --- Parse ---------------------------------------------------------------------
+
+contains() {
+    local needle="$1" item
+    shift
+    for item in "$@"; do
+        [[ "${item}" == "${needle}" ]] && return 0
+    done
+    return 1
+}
+
+for file in "${files[@]}"; do
+    [[ -f "${file}" ]] || fail "pool file '${file}' not found."
+    pool=""
+    number=0
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        number=$((number + 1))
+        where="${file}:${number}"
+        [[ "${line}" =~ ^[[:space:]]*(#|$) ]] && continue
+        read -r -a words <<< "${line}"
+        key="${words[0]}"
+        values=("${words[@]:1}")
+        rest="${line#*"${key}"}"
+        rest="${rest#"${rest%%[![:space:]]*}"}"
+        (( ${#values[@]} > 0 )) || fail "${where}: '${key}' needs a value."
+        case "${key}" in
+            prepare)
+                for project in "${values[@]}"; do
+                    contains "${project}" "${prepare_projects[@]}" || prepare_projects+=("${project}")
+                done
+                continue
+                ;;
+            link)
+                (( ${#values[@]} == 1 )) && [[ "${values[0]}" == *=* ]] || fail "${where}: expected link <vendor/package>=<dir>."
+                package="${values[0]%%=*}"
+                if [[ -n "${links[${package}]+x}" && "${links[${package}]}" != "${values[0]#*=}" ]]; then
+                    fail "${where}: ${package} is already linked to ${links[${package}]}."
+                fi
+                links[${package}]="${values[0]#*=}"
+                continue
+                ;;
+            tools)
+                (( ${#values[@]} >= 2 )) || fail "${where}: expected tools <dir> <command>..."
+                contains "${rest}" "${tools_commands[@]}" || tools_commands+=("${rest}")
+                continue
+                ;;
+            pool)
+                (( ${#values[@]} == 1 )) || fail "${where}: expected pool <name>."
+                pool="${values[0]}"
+                check_instance_name "${pool}-1"
+                contains "${pool}" "${pools[@]}" && fail "${where}: pool ${pool} is defined twice."
+                pools+=("${pool}")
+                pool_file[${pool}]="${file}"
+                pool_instances[${pool}]=1
+                continue
+                ;;
+        esac
+        [[ -n "${pool}" ]] || fail "${where}: '${key}' must follow a pool line."
+        case "${key}" in
+            instances)
+                [[ "${values[0]}" =~ ^[1-9][0-9]*$ && ${#values[@]} -eq 1 ]] || fail "${where}: expected instances <number>."
+                pool_instances[${pool}]="${values[0]}"
+                ;;
+            themes) pool_themes[${pool}]+=" ${values[*]}" ;;
+            plugins) pool_plugins[${pool}]+=" ${values[*]}" ;;
+            activate) pool_activate[${pool}]="${values[0]}" ;;
+            theme-zip) pool_theme_zip[${pool}]="${values[0]}" ;;
+            child-theme-zip) pool_child_zip[${pool}]="${values[0]}" ;;
+            plugin-zip) pool_plugin_zips[${pool}]+=" ${values[0]}" ;;
+            object-cache)
+                [[ "${values[0]}" == valkey ]] || fail "${where}: object-cache supports only valkey."
+                pool_cache[${pool}]=valkey
+                ;;
+            e2e) pool_e2e[${pool}]="${values[0]}" ;;
+            run) pool_run[${pool}]="${rest}" ;;
+            *) fail "${where}: unknown key '${key}'." ;;
+        esac
+    done < "${file}"
+done
+(( ${#pools[@]} > 0 )) || fail "the pool files define no pool."
+
+instance_names() {
+    local pool="$1" n
+    for (( n = 1; n <= pool_instances[${pool}]; n++ )); do
+        echo "${pool}-${n}"
+    done
+}
+
+all_instances=()
+for pool in "${pools[@]}"; do
+    where="${pool_file[${pool}]}, pool ${pool}"
+    if [[ -n "${pool_e2e[${pool}]-}" && -n "${pool_run[${pool}]-}" ]] || [[ -z "${pool_e2e[${pool}]-}${pool_run[${pool}]-}" ]]; then
+        fail "${where}: needs exactly one action, e2e or run."
+    fi
+    if [[ -n "${pool_run[${pool}]-}" && "${pool_instances[${pool}]}" != 1 ]]; then
+        fail "${where}: run needs instances 1."
+    fi
+    if [[ -n "${pool_theme_zip[${pool}]-}" ]]; then
+        [[ -z "${pool_themes[${pool}]-}${pool_plugins[${pool}]-}${pool_activate[${pool}]-}" ]] || fail "${where}: mixes release ZIPs with themes, plugins or activate."
+    else
+        [[ -n "${pool_themes[${pool}]-}" && -n "${pool_activate[${pool}]-}" ]] || fail "${where}: needs themes and activate, or theme-zip."
+        [[ -z "${pool_child_zip[${pool}]-}${pool_plugin_zips[${pool}]-}" ]] || fail "${where}: child-theme-zip and plugin-zip need theme-zip."
+    fi
+    while IFS= read -r instance; do
+        all_instances+=("${instance}")
+    done < <(instance_names "${pool}")
+done
+
+# --- Prepare -------------------------------------------------------------------
+
+started=()
+cleanup() {
+    if [[ "${keep}" == false && ${#started[@]} -gt 0 ]]; then
+        "${WP_TEST_ENV_DIR}/bin/down" "${started[@]}" >/dev/null || true
+    fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+run_start=${SECONDS}
+mkdir -p "${RESULTS_DIR}"
+rm -rf "${RESULTS_DIR}/_up"
+mkdir -p "${RESULTS_DIR}/_up"
+
+"${WP_TEST_ENV_DIR}/bin/build" >/dev/null
+if [[ "${skip_prepare}" == false ]]; then
+    if (( ${#prepare_projects[@]} > 0 )); then
+        link_args=()
+        for package in "${!links[@]}"; do
+            link_args+=(--link "${package}=${links[${package}]}")
+        done
+        echo "== prepare: ${prepare_projects[*]}"
+        "${WP_TEST_ENV_DIR}/bin/prepare" "${link_args[@]}" "${prepare_projects[@]}"
+    fi
+    for command in "${tools_commands[@]}"; do
+        read -r -a words <<< "${command}"
+        echo "== tools: ${command}"
+        "${WP_TEST_ENV_DIR}/bin/tools" -w "${words[0]}" bash -c "${command#"${words[0]}"}"
+    done
+fi
+
+# --- Start instances -------------------------------------------------------------
+
+# zip_of <glob>: the matching ZIP with the highest version.
+zip_of() {
+    local matches
+    matches="$(compgen -G "${WORKSPACE_DIR}/$1" | sort -V || true)"
+    [[ -n "${matches}" ]] || fail "no file matches the ZIP glob '$1' in the workspace."
+    tail -n 1 <<< "${matches}"
+}
+
+up_args() {
+    local pool="$1" item
+    if [[ -n "${pool_theme_zip[${pool}]-}" ]]; then
+        echo --theme-zip; zip_of "${pool_theme_zip[${pool}]}"
+        if [[ -n "${pool_child_zip[${pool}]-}" ]]; then
+            echo --child-theme-zip; zip_of "${pool_child_zip[${pool}]}"
+        fi
+        for item in ${pool_plugin_zips[${pool}]-}; do
+            echo --plugin-zip; zip_of "${item}"
+        done
+    else
+        for item in ${pool_themes[${pool}]}; do
+            echo --theme; echo "${item}"
+        done
+        for item in ${pool_plugins[${pool}]-}; do
+            echo --plugin; echo "${item}"
+        done
+        echo --activate; echo "${pool_activate[${pool}]}"
+    fi
+    if [[ -n "${pool_cache[${pool}]-}" ]]; then
+        echo --object-cache; echo valkey
+    fi
+}
+
+echo "== starting ${#all_instances[@]} instances"
+up_pids=()
+up_names=()
+for pool in "${pools[@]}"; do
+    mapfile -t arguments < <(up_args "${pool}")
+    for (( i = 0; i < ${#arguments[@]}; i++ )); do
+        if [[ "${arguments[i]}" == *.zip ]]; then
+            echo "   ${pool}: ${arguments[i]#"${WORKSPACE_DIR}/"}"
+        fi
+    done
+    while IFS= read -r instance; do
+        started+=("${instance}")
+        "${WP_TEST_ENV_DIR}/bin/up" "${instance}" "${arguments[@]}" > "${RESULTS_DIR}/_up/${instance}.log" 2>&1 &
+        up_pids+=($!)
+        up_names+=("${instance}")
+    done < <(instance_names "${pool}")
+done
+failed_up=()
+for i in "${!up_pids[@]}"; do
+    wait "${up_pids[i]}" || failed_up+=("${up_names[i]}")
+done
+if (( ${#failed_up[@]} > 0 )); then
+    for instance in "${failed_up[@]}"; do
+        echo "--- ${instance} (results/_up/${instance}.log):" >&2
+        tail -n 20 "${RESULTS_DIR}/_up/${instance}.log" >&2
+    done
+    fail "instances failed to start: ${failed_up[*]}"
+fi
+echo "   ready after $(( SECONDS - run_start )) s"
+
+# --- Run pools -------------------------------------------------------------------
+
+run_pool() {
+    local pool="$1" instances command
+    if [[ -n "${pool_e2e[${pool}]-}" ]]; then
+        instances="$(instance_names "${pool}" | paste -sd, -)"
+        "${WP_TEST_ENV_DIR}/bin/e2e" --instances "${instances}" --project "${pool_e2e[${pool}]}" --results "${pool}"
+    else
+        command="${pool_run[${pool}]//\{instance\}/${pool}-1}"
+        (cd "${WORKSPACE_DIR}" && bash -c "${command}")
+    fi
+}
+
+echo "== running ${#pools[@]} pools"
+pool_pids=()
+for pool in "${pools[@]}"; do
+    (
+        start=${SECONDS}
+        status=0
+        run_pool "${pool}" > "${RESULTS_DIR}/${pool}.log" 2>&1 || status=$?
+        echo "${status} $(( SECONDS - start ))" > "${RESULTS_DIR}/${pool}.status"
+    ) &
+    pool_pids+=($!)
+    # Live output with the pool name in front; the log keeps it plain.
+    (tail -n +1 -F --pid="$!" "${RESULTS_DIR}/${pool}.log" 2>/dev/null | sed -u "s/^/[${pool}] /") &
+done
+for pid in "${pool_pids[@]}"; do
+    wait "${pid}"
+done
+wait
+
+# --- Summary ---------------------------------------------------------------------
+
+echo
+echo "== summary"
+failed=0
+for pool in "${pools[@]}"; do
+    read -r status seconds < "${RESULTS_DIR}/${pool}.status"
+    if [[ "${status}" == 0 ]]; then
+        result=passed
+    else
+        result="FAILED (exit ${status})"
+        failed=$((failed + 1))
+    fi
+    printf '   %-20s %4s s  %s  (results/%s.log)\n' "${pool}" "${seconds}" "${result}" "${pool}"
+done
+echo "   total ${SECONDS} s with ${#all_instances[@]} instances"
+if [[ "${keep}" == true ]]; then
+    echo "   instances kept: ${started[*]} (remove with bin/down --all)"
+fi
+(( failed == 0 )) || fail "${failed} pool(s) failed."

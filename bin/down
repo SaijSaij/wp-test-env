@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Removes test instances (containers, tmpfs data and state), with --all every instance;
+# the shared network goes when no instance uses it any more.
+#
+# Usage: bin/down <instance>... | bin/down --all
+set -euo pipefail
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+[[ $# -gt 0 ]] || fail "Usage: bin/down <instance>... | bin/down --all"
+
+instances=()
+if [[ "$1" == "--all" ]]; then
+    [[ $# -eq 1 ]] || fail "--all takes no further arguments."
+    # Instances with containers, plus those whose containers are already gone.
+    while IFS= read -r project; do
+        instances+=("${project#wp-test-env-}")
+    done < <(docker ps -a --format '{{.Label "com.docker.compose.project"}}' | grep '^wp-test-env-.' | sort -u)
+    if [[ -d "${STATE_DIR}" ]]; then
+        while IFS= read -r directory; do
+            instances+=("$(basename "${directory}")")
+        done < <(find "${STATE_DIR}" -mindepth 1 -maxdepth 1 -type d)
+    fi
+else
+    instances=("$@")
+fi
+
+remove_instance() {
+    local instance="$1" project
+    project="$(instance_project "${instance}")"
+    if [[ -n "$(docker ps -aq --filter "label=com.docker.compose.project=${project}")" ]]; then
+        docker compose -p "${project}" down --volumes --remove-orphans --timeout 1 >/dev/null 2>&1 \
+            || fail "cannot remove instance ${instance} (Compose project ${project})."
+    fi
+    rm -rf "$(instance_state "${instance}")"
+    echo "${instance}: removed"
+}
+
+# In parallel; every instance is its own Compose project.
+declare -A seen=()
+pids=()
+for instance in "${instances[@]}"; do
+    [[ -z "${seen[${instance}]+x}" ]] || continue
+    seen[${instance}]=1
+    check_instance_name "${instance}"
+    remove_instance "${instance}" &
+    pids+=($!)
+done
+failed=0
+for pid in "${pids[@]}"; do
+    wait "${pid}" || failed=$((failed + 1))
+done
+(( failed == 0 )) || fail "${failed} instance(s) could not be removed."
+
+# The shared network goes with the last instance.
+if docker network inspect "${NETWORK}" >/dev/null 2>&1; then
+    if [[ "$(docker network inspect --format '{{len .Containers}}' "${NETWORK}")" == "0" ]]; then
+        docker network rm "${NETWORK}" >/dev/null
+    fi
+fi

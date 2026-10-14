@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Runs the Playwright tests of a project (npm run test:e2e) against test instances,
+# in the Playwright image matching the project's @playwright/test version, on the
+# Docker network wp-test-env. The project's Playwright configuration receives:
+#   WP_BASE_URLS        comma-separated instance URLs (one worker per instance)
+#   WP_USERNAME, WP_PASSWORD   administrator of every instance
+#   E2E_TARGET          dev or release (mode of the instances; mixed modes are an error)
+#   E2E_OUTPUT_DIR      writable results directory (results/<name>/ here, emptied first)
+#   PLAYWRIGHT_VERSION  version of the image's browsers
+# The workspace is mounted read-only.
+#
+# Usage: bin/e2e --instances <a>[,<b>...] --project <dir> --results <name> [-- <playwright arguments>...]
+set -euo pipefail
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+usage() {
+    fail "Usage: bin/e2e --instances <a>[,<b>...] --project <dir> --results <name> [-- <playwright arguments>...]"
+}
+
+instances=""
+project=""
+results=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --instances) [[ $# -ge 2 ]] || usage; instances="$2"; shift 2 ;;
+        --project) [[ $# -ge 2 ]] || usage; project="$2"; shift 2 ;;
+        --results) [[ $# -ge 2 ]] || usage; results="$2"; shift 2 ;;
+        --) shift; break ;;
+        *) usage ;;
+    esac
+done
+[[ -n "${instances}" && -n "${project}" && -n "${results}" ]] || usage
+[[ "${results}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || fail "invalid results name '${results}'."
+[[ "${project}" =~ ^[^/]+$ && -d "${WORKSPACE_DIR}/${project}" ]] || fail "project '${project}' not found in the workspace (${WORKSPACE_DIR})."
+
+package="${WORKSPACE_DIR}/${project}/node_modules/@playwright/test/package.json"
+[[ -f "${package}" ]] || fail "${project} has no node_modules/@playwright/test; prepare it first (bin/prepare ${project})."
+version="$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "${package}")"
+[[ -n "${version}" ]] || fail "cannot read the version from ${package}."
+
+IFS=',' read -r -a names <<< "${instances}"
+urls=()
+mode=""
+for instance in "${names[@]}"; do
+    require_instance "${instance}"
+    if [[ -z "${mode}" ]]; then
+        mode="$(instance_mode "${instance}")"
+    elif [[ "$(instance_mode "${instance}")" != "${mode}" ]]; then
+        fail "instances ${instances} mix dev and release mode."
+    fi
+    urls+=("$(instance_url "${instance}")")
+done
+joined_urls="$(IFS=,; echo "${urls[*]}")"
+
+output="${RESULTS_DIR}/${results}"
+rm -rf "${output}"
+mkdir -p "${output}"
+
+image="mcr.microsoft.com/playwright:v${version}-noble"
+docker image inspect "${image}" >/dev/null 2>&1 || docker pull --quiet "${image}" >/dev/null
+
+# --ipc=host and --init as recommended for Chromium in Playwright's Docker documentation.
+exec docker run --rm --init --ipc=host \
+    --network "${NETWORK}" \
+    --user "$(id -u):$(id -g)" \
+    -v "${WORKSPACE_DIR}:/workspace:ro" \
+    -v "${output}:/results" \
+    -e HOME=/tmp \
+    -e npm_config_update_notifier=false \
+    -e PLAYWRIGHT_VERSION="${version}" \
+    -e WP_BASE_URLS="${joined_urls}" \
+    -e WP_USERNAME="${ADMIN_USER}" \
+    -e WP_PASSWORD="${ADMIN_PASSWORD}" \
+    -e E2E_TARGET="${mode}" \
+    -e E2E_OUTPUT_DIR=/results \
+    "${image}" npm --prefix "/workspace/${project}" run test:e2e -- "$@"
