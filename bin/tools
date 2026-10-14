@@ -2,19 +2,27 @@
 # Runs a command in the tools image (PHP CLI, Composer, Node, Strauss) as the host
 # user; the workspace is writable at /workspace, caches persist in a named volume.
 #
-# Usage: bin/tools [-w <directory in the workspace>] <command>...
+# -e passes an environment variable (NAME=value, or NAME to take it from the caller).
+#
+# Usage: bin/tools [-e NAME[=value]]... [-w <directory in the workspace>] <command>...
 set -euo pipefail
 # shellcheck source=lib/common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
+usage="Usage: bin/tools [-e NAME[=value]]... [-w <directory>] <command>..."
 workdir=/workspace
-if [[ "${1-}" == "-w" ]]; then
-    [[ $# -ge 2 ]] || fail "-w needs a directory. Usage: bin/tools [-w <directory>] <command>..."
-    [[ -d "${WORKSPACE_DIR}/$2" ]] || fail "directory '$2' not found in the workspace (${WORKSPACE_DIR})."
-    workdir="/workspace/$2"
+environment=()
+while [[ "${1-}" == "-e" || "${1-}" == "-w" ]]; do
+    [[ $# -ge 2 ]] || fail "$1 needs a value. ${usage}"
+    if [[ "$1" == "-e" ]]; then
+        environment+=(-e "$2")
+    else
+        [[ -d "${WORKSPACE_DIR}/$2" ]] || fail "directory '$2' not found in the workspace (${WORKSPACE_DIR})."
+        workdir="/workspace/$2"
+    fi
     shift 2
-fi
-[[ $# -gt 0 ]] || fail "no command given. Usage: bin/tools [-w <directory>] <command>..."
+done
+[[ $# -gt 0 ]] || fail "no command given. ${usage}"
 docker image inspect "${TOOLS_IMAGE}" >/dev/null 2>&1 || fail "image ${TOOLS_IMAGE} not found; run bin/build first."
 
 # shellcheck disable=SC2046 # docker_tty_flags prints one flag
@@ -23,4 +31,5 @@ exec docker run --rm $(docker_tty_flags) \
     -v "${WORKSPACE_DIR}:/workspace" \
     -v "${TOOLS_CACHE_VOLUME}:/cache" \
     -w "${workdir}" \
+    "${environment[@]}" \
     "${TOOLS_IMAGE}" "$@"

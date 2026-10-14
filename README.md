@@ -31,7 +31,7 @@ Every instance has the administrator `admin` with the password `password`, `WP_D
 Run from this directory.
 
 ```sh
-bin/build [--pull]                       # build the images (--pull: update WordPress and the service images)
+bin/build [--pull] [wordpress|tools]...  # build the images, default both (--pull: update WordPress and the service images)
 bin/prepare [--link vendor/package=dir]... <project>...   # composer install, package links, npm ci, npm run build
 bin/up <instance> --theme <dir>... [--plugin <dir>]... --activate <theme> [options]          # dev mode
 bin/up <instance> --theme-zip <zip> [--child-theme-zip <zip>] [--plugin-zip <zip>]... [options]   # release mode
@@ -41,7 +41,7 @@ bin/exec [-u user] [-e NAME=value]... <instance> <command>...
 bin/logs <instance> [docker logs options]...
 bin/mode <instance>                      # dev or release
 bin/container <instance>                 # name of the WordPress container, e.g. for docker cp
-bin/tools [-w <dir>] <command>...        # PHP CLI, Composer, Node, Strauss as the host user, workspace writable
+bin/tools [-e NAME[=value]]... [-w <dir>] <command>...   # PHP CLI, Composer, Node, Strauss as the host user, workspace writable
 bin/e2e --instances a[,b...] --project <dir> --results <name> [-- <playwright arguments>...]
 bin/run [--keep] [--skip-prepare] <pool file>...
 ```
