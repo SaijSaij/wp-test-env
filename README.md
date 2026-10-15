@@ -15,6 +15,12 @@ workspace/
 └── my-plugin/
 ```
 
+To test projects elsewhere, set `WP_TEST_ENV_WORKSPACE` to another directory (absolute, or relative to the current directory) for any `bin/` command; it applies to everything that command starts. Projects are always paths relative to the workspace and may be nested (`clients/site/web/app/themes/my-theme`); instances link them into `wp-content/themes` and `wp-content/plugins` under their last path segment, which must be unique, and `--activate`/`activate` name that slug:
+
+```sh
+WP_TEST_ENV_WORKSPACE=~/dev bin/run ~/dev/clients/site/tests/dev.pools
+```
+
 ## Instances
 
 Every instance is a Compose project of its own (`wp-test-env-<instance>`) with WordPress (latest stable version, PHP 8.5, Apache, WP-CLI), MariaDB, Mailpit and, on request, Valkey as persistent object cache. Only the WordPress container joins the shared Docker network `wp-test-env`, as `http://<instance>.test`; test runners in that network (Playwright, see below) reach it there. Instances publish no host ports, so they run next to any development environment.
@@ -33,7 +39,7 @@ Run from this directory.
 ```sh
 bin/build [--local] [--pull] [wordpress|tools]...   # provide the images, default both: pull the published ones, or build (--local always)
 bin/prepare [--link vendor/package=dir]... <project>...   # composer install, package links, npm ci, npm run build
-bin/up <instance> --theme <dir>... [--plugin <dir>]... --activate <theme> [options]          # dev mode
+bin/up <instance> --theme <dir>... [--plugin <dir>]... --activate <theme slug> [options]     # dev mode
 bin/up <instance> --theme-zip <zip> [--child-theme-zip <zip>] [--plugin-zip <zip>]... [options]   # release mode
 bin/down <instance>... | --all           # remove instances (and the network after the last one)
 bin/wp [-e NAME=value]... <instance> <wp arguments>...   # WP-CLI as www-data
@@ -48,7 +54,7 @@ bin/run [--keep] [--skip-prepare] <pool file>...
 
 Options of `bin/up` in both modes: `--object-cache valkey` (an own Valkey per instance), `--xdebug <mode>` (`XDEBUG_MODE`, default `off`), `--env NAME=value` (further environment variables of the WordPress container, e.g. `XDEBUG_CONFIG`). `bin/up` replaces an instance of the same name.
 
-**Package links** (`bin/prepare --link`): a Composer package of a project is replaced by a relative symlink to its checkout in the workspace (`vendor/<package>` → `../../../<dir>`), so the checkout is tested instead of the locked version; lock file and `composer.json` stay untouched. `npm ci` runs only when `node_modules` is missing or older than `package-lock.json`.
+**Package links** (`bin/prepare --link`): a Composer package of a project is replaced by a relative symlink to its checkout in the workspace (`vendor/<package>` → `<dir>`, computed relative to both locations), so the checkout is tested instead of the locked version; lock file and `composer.json` stay untouched. `npm ci` runs only when `node_modules` is missing or older than `package-lock.json`.
 
 ## Browser tests
 
@@ -78,7 +84,7 @@ pool theme-e2e                              # a pool; the keys below belong to i
 instances 3                                 # instances theme-e2e-1 … theme-e2e-3 (default 1)
 themes my-theme                             # dev mode: projects linked as themes …
 plugins my-plugin                           # … and plugins
-activate my-theme                           # theme to activate
+activate my-theme                           # slug (last path segment) of the theme to activate
 object-cache valkey                         # persistent object cache
 e2e my-theme                                # action: bin/e2e of the project on all instances of the pool
 

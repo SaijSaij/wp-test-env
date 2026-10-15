@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "${instances}" && -n "${project}" && -n "${results}" ]] || usage
 [[ "${results}" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || fail "invalid results name '${results}'."
-[[ "${project}" =~ ^[^/]+$ && -d "${WORKSPACE_DIR}/${project}" ]] || fail "project '${project}' not found in the workspace (${WORKSPACE_DIR})."
+check_project_path project "${project}"
 
 package="${WORKSPACE_DIR}/${project}/node_modules/@playwright/test/package.json"
 [[ -f "${package}" ]] || fail "${project} has no node_modules/@playwright/test; prepare it first (bin/prepare ${project})."

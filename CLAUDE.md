@@ -1,6 +1,6 @@
 # CLAUDE.md – wp-test-env
 
-General Docker test environment for WordPress themes and plugins: fresh, isolated instances (one Compose project each, everything on tmpfs) for browser, WP-CLI and release tests and benchmarks, run in parallel from pool files. It lives next to the projects it tests (the parent directory is the workspace, mounted as `/workspace`). The README is the user documentation; this file lists what matters when changing the environment.
+General Docker test environment for WordPress themes and plugins: fresh, isolated instances (one Compose project each, everything on tmpfs) for browser, WP-CLI and release tests and benchmarks, run in parallel from pool files. It lives next to the projects it tests (the parent directory is the workspace, mounted as `/workspace`; `WP_TEST_ENV_WORKSPACE` selects another one). The README is the user documentation; this file lists what matters when changing the environment.
 
 <!-- Maintainers: keep this file under 200 lines. -->
 
@@ -8,7 +8,8 @@ General Docker test environment for WordPress themes and plugins: fresh, isolate
 
 - **Stay general.** Nothing here refers to a specific theme, plugin or library: no project names in scripts, compose files or README. Projects describe their tests in their own pool files.
 - **Nothing persists and nothing is shared between instances:** database, core and uploads on tmpfs; one Valkey per instance (the object cache drop-in's flush empties the whole database); only the WordPress container joins the shared network `wp-test-env`. Never put `db`, `valkey` or `mail` on that network: every instance has services of those names, and Docker DNS would pick any of them. Never address an instance by the service name `wordpress` there.
-- **No host ports, no `.env`:** the workspace is always the parent directory, the administrator is fixed in `lib/common.sh`, test runners reach instances at `http://<instance>.test` on the network.
+- **No host ports, no `.env`:** the workspace is the parent directory unless `WP_TEST_ENV_WORKSPACE` names another one (resolved and exported in `lib/common.sh`, so every command a run starts sees the same workspace); the administrator is fixed in `lib/common.sh`; test runners reach instances at `http://<instance>.test` on the network.
+- **Projects are paths relative to the workspace** (nested allowed, never `.`/`..`; `check_project_path`, `check_project_slugs` in `lib/common.sh`), linked under their last path segment.
 - **The workspace is read-only in instances;** only `bin/tools` writes to it, as the host user. Relative symlinks must resolve on the host and in every container.
 - **Published images are tagged with the hash of their `docker/<image>/` directory** (`image_hash` in `lib/common.sh`); `.github/workflows/images.yml` publishes them on changes and daily. Everything an image needs must live in its directory, so the hash covers it. After changing `docker/`, test with `bin/build` (it builds the unpublished image locally).
 - **The images are kept apart from those of the development environment on purpose** (`docker/wordpress`, `docker/tools`): the test environment must not depend on it. When one of them changes, consider the other.

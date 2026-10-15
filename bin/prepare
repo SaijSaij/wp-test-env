@@ -2,9 +2,10 @@
 # Prepares projects of the workspace for instances in dev mode: Composer install,
 # package links, npm install and build.
 #
+# Projects and link directories are paths relative to the workspace (may be nested).
 # A package link replaces a Composer package of a project by a relative symlink to
-# its checkout in the workspace (vendor/<package> -> ../../../<directory>), so the
-# checkout is tested instead of the locked version. Lock file and composer.json stay
+# its checkout in the workspace (computed from both locations), so the checkout is
+# tested instead of the locked version. Lock file and composer.json stay
 # untouched; Composer removes only the link when it installs another version.
 #
 # npm ci runs only when node_modules is missing or older than package-lock.json
@@ -40,26 +41,27 @@ done
 (( ${#projects[@]} > 0 )) || usage
 
 for link in "${links[@]}"; do
-    if [[ ! "${link}" =~ ^[a-z0-9_.-]+/[a-z0-9_.-]+=[^/=]+$ ]]; then
+    if [[ ! "${link}" =~ ^[a-z0-9_.-]+/[a-z0-9_.-]+=[^=]+$ ]]; then
         fail "link '${link}' must have the form vendor/package=directory."
     fi
-    [[ -d "${WORKSPACE_DIR}/${link#*=}" ]] || fail "directory '${link#*=}' of link '${link}' not found in the workspace."
+    check_project_path "directory of link ${link%%=*}" "${link#*=}"
 done
 for project in "${projects[@]}"; do
-    [[ "${project}" =~ ^[^/]+$ && -d "${WORKSPACE_DIR}/${project}" ]] || fail "project '${project}' not found in the workspace (${WORKSPACE_DIR})."
+    check_project_path project "${project}"
 done
 
 link_packages() {
-    local project="$1" link package directory target
+    local project="$1" link package directory target relative
     for link in "${links[@]}"; do
         package="${link%%=*}"
         directory="${link#*=}"
         target="${WORKSPACE_DIR}/${project}/vendor/${package}"
-        if [[ -L "${target}" && "$(readlink "${target}")" == "../../../${directory}" ]]; then
-            echo "package link: ${project} uses ${package} from ${directory}"
+        if [[ ! -e "${target}" && ! -L "${target}" ]]; then
             continue
         fi
-        if [[ ! -e "${target}" && ! -L "${target}" ]]; then
+        relative="$(realpath -m --relative-to="$(dirname "${target}")" "${WORKSPACE_DIR}/${directory}")"
+        if [[ -L "${target}" && "$(readlink "${target}")" == "${relative}" ]]; then
+            echo "package link: ${project} uses ${package} from ${directory}"
             continue
         fi
         if [[ -L "${target}" ]]; then
@@ -67,7 +69,7 @@ link_packages() {
         else
             rm -r -- "${target}"
         fi
-        ln -s "../../../${directory}" "${target}"
+        ln -s "${relative}" "${target}"
         echo "package link: ${project} uses ${package} from ${directory}"
     done
 }

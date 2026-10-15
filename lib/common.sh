@@ -3,8 +3,19 @@
 # shellcheck disable=SC2034 # the constants are used by the scripts that source this file
 
 WP_TEST_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# The workspace is the parent directory: the projects live next to this repository.
-WORKSPACE_DIR="$(cd "${WP_TEST_ENV_DIR}/.." && pwd)"
+# The workspace: the parent directory (the projects live next to this repository), or
+# WP_TEST_ENV_WORKSPACE (absolute or relative to the current directory). The resolved
+# path is exported, so commands started from another directory use the same workspace.
+if [[ -n "${WP_TEST_ENV_WORKSPACE:-}" ]]; then
+    if [[ ! -d "${WP_TEST_ENV_WORKSPACE}" ]]; then
+        echo "ERROR: WP_TEST_ENV_WORKSPACE '${WP_TEST_ENV_WORKSPACE}' is not a directory (relative to $(pwd))." >&2
+        exit 1
+    fi
+    WORKSPACE_DIR="$(cd "${WP_TEST_ENV_WORKSPACE}" && pwd)"
+    export WP_TEST_ENV_WORKSPACE="${WORKSPACE_DIR}"
+else
+    WORKSPACE_DIR="$(cd "${WP_TEST_ENV_DIR}/.." && pwd)"
+fi
 STATE_DIR="${WP_TEST_ENV_DIR}/state"
 RESULTS_DIR="${WP_TEST_ENV_DIR}/results"
 
@@ -24,6 +35,29 @@ ADMIN_EMAIL=admin@example.com
 fail() {
     echo "ERROR: $*" >&2
     exit 1
+}
+
+# check_project_path <what> <path>: a directory in the workspace, given relative to it
+# (may be nested, e.g. clients/my-plugin), without '.' or '..'.
+check_project_path() {
+    if [[ ! "$2" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ || "/$2/" =~ /\.\.?/ ]]; then
+        fail "$1 '$2' must be a path relative to the workspace, without '.' or '..'."
+    fi
+    [[ -d "${WORKSPACE_DIR}/$2" ]] || fail "$1 '$2' not found in the workspace (${WORKSPACE_DIR})."
+}
+
+# check_project_slugs <what> <path>...: projects are linked into wp-content under their
+# last path segment, which must be unique.
+check_project_slugs() {
+    local what="$1" path slug
+    shift
+    local -A slugs=()
+    for path in "$@"; do
+        check_project_path "${what}" "${path}"
+        slug="$(basename "${path}")"
+        [[ -z "${slugs[${slug}]:-}" ]] || fail "${what} '${slugs[${slug}]}' and '${path}' would both be linked as '${slug}'."
+        slugs[${slug}]="${path}"
+    done
 }
 
 # check_instance_name <instance>: a DNS label, also usable in Compose project names.

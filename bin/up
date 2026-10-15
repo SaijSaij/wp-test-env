@@ -2,8 +2,9 @@
 # Starts a fresh test instance (replacing one of the same name) at http://<instance>.test
 # on the Docker network wp-test-env, installs WordPress and sets it up.
 #
-# Dev mode links projects of the workspace (read-only) and activates them:
-#   bin/up <instance> --theme <dir>... [--plugin <dir>]... --activate <theme> [options]
+# Dev mode links projects of the workspace (read-only) and activates them; projects are
+# paths relative to the workspace, linked under their last path segment (the slug):
+#   bin/up <instance> --theme <dir>... [--plugin <dir>]... --activate <theme slug> [options]
 # Release mode installs release ZIPs, activates them (the child theme, if given) and
 # makes their directories read-only:
 #   bin/up <instance> --theme-zip <zip> [--child-theme-zip <zip>] [--plugin-zip <zip>]... [options]
@@ -69,10 +70,13 @@ else
     if (( ${#themes[@]} == 0 )) || [[ -z "${activate}" ]]; then
         fail "dev mode needs --theme and --activate."
     fi
-    for project in "${themes[@]}" "${plugins[@]}"; do
-        [[ "${project}" =~ ^[^/,]+$ && -d "${WORKSPACE_DIR}/${project}" ]] || fail "project '${project}' not found in the workspace (${WORKSPACE_DIR})."
+    check_project_slugs --theme "${themes[@]}"
+    check_project_slugs --plugin "${plugins[@]}"
+    theme_slugs=()
+    for project in "${themes[@]}"; do
+        theme_slugs+=("$(basename "${project}")")
     done
-    [[ " ${themes[*]} " == *" ${activate} "* ]] || fail "--activate '${activate}' is not one of the --theme projects."
+    [[ " ${theme_slugs[*]} " == *" ${activate} "* ]] || fail "--activate '${activate}' is not the slug of one of the --theme projects (${theme_slugs[*]})."
 fi
 
 docker image inspect "${WORDPRESS_IMAGE}" >/dev/null 2>&1 || fail "image ${WORDPRESS_IMAGE} not found; run bin/build first."
@@ -151,8 +155,12 @@ install_theme() {
 
 if [[ "${mode}" == "dev" ]]; then
     wp theme activate "${activate}" >/dev/null
-    if (( ${#plugins[@]} > 0 )); then
-        wp plugin activate "${plugins[@]}" >/dev/null
+    plugin_slugs=()
+    for project in "${plugins[@]}"; do
+        plugin_slugs+=("$(basename "${project}")")
+    done
+    if (( ${#plugin_slugs[@]} > 0 )); then
+        wp plugin activate "${plugin_slugs[@]}" >/dev/null
     fi
 else
     # The parent theme first: WordPress would try to download a missing parent theme from wordpress.org.
@@ -187,4 +195,4 @@ status="$(docker exec "${container}" curl -sS -o /dev/null -w '%{http_code}' "${
 echo "${instance}: WordPress $(wp core version) at ${url} (${mode} mode)," \
     "theme $(wp theme list --status=active --field=name)," \
     "plugins: $(wp plugin list --status=active --field=name | paste -sd ' ' -)," \
-    "object cache: $(wp cache type)"
+    "object cache: $(wp cache type), workspace ${WORKSPACE_DIR}"

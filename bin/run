@@ -7,8 +7,8 @@
 # Usage: bin/run [--keep] [--skip-prepare] <pool file>...
 #
 # Pool file format: one key and its words per line; blank lines and lines starting
-# with # are ignored. Paths are relative to the workspace; commands run in the
-# workspace root.
+# with # are ignored. Paths are relative to the workspace (the parent directory, or
+# WP_TEST_ENV_WORKSPACE) and may be nested; commands run in the workspace root.
 #
 #   prepare <project>...            bin/prepare these projects (dev mode)
 #   link <vendor/package>=<dir>     package link for bin/prepare
@@ -17,7 +17,7 @@
 #   instances <n>                   number of instances (default 1): <name>-1 … <name>-<n>
 #   themes <dir>...                 dev mode: projects linked as themes
 #   plugins <dir>...                dev mode: projects linked as plugins
-#   activate <theme>                dev mode: theme to activate
+#   activate <theme>                dev mode: slug (last path segment) of the theme to activate
 #   theme-zip <glob>                release mode: theme ZIP
 #   child-theme-zip <glob>          release mode: child theme ZIP
 #   plugin-zip <glob>               release mode: plugin ZIP (repeatable)
@@ -231,7 +231,7 @@ up_args() {
     fi
 }
 
-echo "== starting ${#all_instances[@]} instances"
+echo "== starting ${#all_instances[@]} instances (workspace ${WORKSPACE_DIR})"
 up_pids=()
 up_names=()
 for pool in "${pools[@]}"; do
