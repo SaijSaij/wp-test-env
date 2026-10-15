@@ -1,0 +1,44 @@
+# Publishes the images to the GitHub Container Registry, tagged with the hash of
+# their docker/ directory (lib/common.sh, image_hash): on every change of docker/,
+# and daily, so the published images carry the latest stable WordPress and PHP.
+# bin/build pulls the image matching the checkout and builds only if it is missing.
+name: Images
+
+on:
+  push:
+    branches: [main]
+    paths: ['docker/**', 'lib/common.sh', 'bin/build', '.github/workflows/images.yml']
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - name: Check out wp-test-env
+        uses: actions/checkout@v5
+
+      - name: Log in to the GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "${GH_TOKEN}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build with the latest base images
+        run: bin/build --local --pull
+
+      - name: Push
+        run: |
+          source lib/common.sh
+          for image in wordpress tools; do
+            ref="$(image_ref "${image}")"
+            docker tag "wp-test-env-${image}" "${ref}"
+            docker push --quiet "${ref}"
+            echo "Pushed ${ref}"
+          done
+

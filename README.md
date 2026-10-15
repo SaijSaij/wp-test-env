@@ -31,7 +31,7 @@ Every instance has the administrator `admin` with the password `password`, `WP_D
 Run from this directory.
 
 ```sh
-bin/build [--pull] [wordpress|tools]...  # build the images, default both (--pull: update WordPress and the service images)
+bin/build [--local] [--pull] [wordpress|tools]...   # provide the images, default both: pull the published ones, or build (--local always)
 bin/prepare [--link vendor/package=dir]... <project>...   # composer install, package links, npm ci, npm run build
 bin/up <instance> --theme <dir>... [--plugin <dir>]... --activate <theme> [options]          # dev mode
 bin/up <instance> --theme-zip <zip> [--child-theme-zip <zip>] [--plugin-zip <zip>]... [options]   # release mode
@@ -91,6 +91,6 @@ A ZIP glob that matches several files takes the highest version (`sort -V`), e.g
 
 ## Notes
 
-- The images are built locally (`wp-test-env-wordpress`, `wp-test-env-tools`). WordPress follows the floating tag `php8.5-apache`; `bin/build --pull` updates it.
+- **Images:** `bin/build` pulls `ghcr.io/saijsaij/wp-test-env-wordpress` and `-tools` with the tag that matches the checkout (a hash of the files in `docker/<image>/`) and tags them locally as `wp-test-env-wordpress` and `wp-test-env-tools`. The workflow `images.yml` publishes them on every change of `docker/` and daily, so they carry the latest stable WordPress (floating tag `php8.5-apache`) within a day. If the matching image is not published, e.g. after a local change of `docker/`, `bin/build` builds it and says so; `bin/build --local --pull` always builds with the latest base images.
 - Instances are independent of each other; how many run well at once depends on the machine. Browsers are the main cost: a Chromium worker in the block editor needs about two CPU cores.
 - `state/` holds the Compose variables and release ZIPs of each running instance, `results/` the test results; both are ignored by Git.

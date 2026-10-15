@@ -1,0 +1,20 @@
+# Checks of the scripts on every push and pull request.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out wp-test-env
+        uses: actions/checkout@v5
+
+      - name: Shellcheck
+        run: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -x bin/* lib/common.sh docker/wordpress/docker-entrypoint-test.sh

@@ -4,6 +4,8 @@
 # environment must not depend on it.
 FROM wordpress:php8.5-apache
 
+LABEL org.opencontainers.image.source=https://github.com/saijsaij/wp-test-env
+
 # Xdebug stays inactive unless XDEBUG_MODE enables it (bin/up defaults it to "off").
 RUN set -eux; \
     apt-get update; \

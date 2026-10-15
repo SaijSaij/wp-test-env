@@ -10,6 +10,7 @@ General Docker test environment for WordPress themes and plugins: fresh, isolate
 - **Nothing persists and nothing is shared between instances:** database, core and uploads on tmpfs; one Valkey per instance (the object cache drop-in's flush empties the whole database); only the WordPress container joins the shared network `wp-test-env`. Never put `db`, `valkey` or `mail` on that network: every instance has services of those names, and Docker DNS would pick any of them. Never address an instance by the service name `wordpress` there.
 - **No host ports, no `.env`:** the workspace is always the parent directory, the administrator is fixed in `lib/common.sh`, test runners reach instances at `http://<instance>.test` on the network.
 - **The workspace is read-only in instances;** only `bin/tools` writes to it, as the host user. Relative symlinks must resolve on the host and in every container.
+- **Published images are tagged with the hash of their `docker/<image>/` directory** (`image_hash` in `lib/common.sh`); `.github/workflows/images.yml` publishes them on changes and daily. Everything an image needs must live in its directory, so the hash covers it. After changing `docker/`, test with `bin/build` (it builds the unpublished image locally).
 - **The images are kept apart from those of the development environment on purpose** (`docker/wordpress`, `docker/tools`): the test environment must not depend on it. When one of them changes, consider the other.
 - **Scripts are idempotent and fail loudly:** `set -euo pipefail`, clear `ERROR:` messages naming the instance, file, line or project at fault, no silent fallbacks. Shared code goes to `lib/common.sh`.
 - **The interface for projects is a contract:** the variables `bin/e2e` passes (`WP_BASE_URLS`, `WP_USERNAME`, `WP_PASSWORD`, `E2E_TARGET`, `E2E_OUTPUT_DIR`, `PLAYWRIGHT_VERSION`), the script name `test:e2e`, the instance URL `http://<instance>.test`, the commands of `bin/` and the pool file format. Change them only together with the projects that use them, and keep the README in sync.
@@ -21,12 +22,13 @@ General Docker test environment for WordPress themes and plugins: fresh, isolate
 Run from this directory.
 
 ```sh
-bin/build                                                   # after changing docker/
+bin/build                                                   # pulls the published images; builds after changing docker/
 bin/up smoke --theme <dir> --activate <dir>                 # a dev instance
 bin/wp smoke option get home                                # WP-CLI
 bin/down --all
 bin/run <pool file>...                                      # whole test setups
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -x bin/* lib/common.sh docker/wordpress/docker-entrypoint-test.sh
+docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12   # after changing .github/workflows/
 ```
 
 ## Definition of done for changes

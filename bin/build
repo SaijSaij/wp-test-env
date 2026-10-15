@@ -1,36 +1,53 @@
 #!/usr/bin/env bash
-# Builds the images (default: wordpress and tools) and, with the wordpress image,
-# pulls the service images if missing. With --pull, base and service images are
-# updated (latest stable WordPress).
+# Provides the images (default: wordpress and tools) under their local names. By
+# default it pulls the published image whose tag is the hash of docker/<image>/
+# (built by .github/workflows/images.yml on every change and daily, so it carries
+# the latest stable WordPress); if that image is not published (e.g. docker/ was
+# changed locally), it builds it and says so. --local always builds. With the
+# wordpress image, the service images are pulled if missing.
+# --pull updates the base images of local builds and the service images.
 #
-# Usage: bin/build [--pull] [wordpress|tools]...
+# Usage: bin/build [--local] [--pull] [wordpress|tools]...
 set -euo pipefail
 # shellcheck source=lib/common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
+usage="Usage: bin/build [--local] [--pull] [wordpress|tools]..."
+local_build=false
 pull=()
 images=()
 for argument in "$@"; do
     case "${argument}" in
+        --local) local_build=true ;;
         --pull) pull=(--pull) ;;
         wordpress | tools) images+=("${argument}") ;;
-        *) fail "unknown argument '${argument}'. Usage: bin/build [--pull] [wordpress|tools]..." ;;
+        *) fail "unknown argument '${argument}'. ${usage}" ;;
     esac
 done
 (( ${#images[@]} > 0 )) || images=(wordpress tools)
 
 for image in "${images[@]}"; do
     case "${image}" in
-        wordpress) docker build "${pull[@]}" -t "${WORDPRESS_IMAGE}" "${WP_TEST_ENV_DIR}/docker/wordpress" ;;
-        tools) docker build "${pull[@]}" -t "${TOOLS_IMAGE}" "${WP_TEST_ENV_DIR}/docker/tools" ;;
+        wordpress) name="${WORDPRESS_IMAGE}" ;;
+        tools) name="${TOOLS_IMAGE}" ;;
     esac
+    if [[ "${local_build}" == false ]]; then
+        ref="$(image_ref "${image}")"
+        if docker pull --quiet "${ref}" >/dev/null 2>&1; then
+            docker tag "${ref}" "${name}"
+            echo "${name}: pulled ${ref}"
+            continue
+        fi
+        echo "${name}: ${ref} is not published (or not reachable); building it locally." >&2
+    fi
+    docker build "${pull[@]}" -t "${name}" "${WP_TEST_ENV_DIR}/docker/${image}"
 done
 
 # The service images of compose.yaml; pulled here once instead of by parallel bin/up runs.
 if [[ " ${images[*]} " == *" wordpress "* ]]; then
     for image in mariadb:lts axllent/mailpit:latest valkey/valkey:9.1-alpine; do
         if (( ${#pull[@]} > 0 )) || ! docker image inspect "${image}" >/dev/null 2>&1; then
-            docker pull --quiet "${image}"
+            docker pull --quiet "${image}" >/dev/null
         fi
     done
 fi

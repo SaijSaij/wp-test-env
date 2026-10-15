@@ -12,6 +12,8 @@ RESULTS_DIR="${WP_TEST_ENV_DIR}/results"
 NETWORK=wp-test-env
 WORDPRESS_IMAGE=wp-test-env-wordpress
 TOOLS_IMAGE=wp-test-env-tools
+# Published images (.github/workflows/images.yml), tagged with the hash of their docker/ directory.
+REGISTRY=ghcr.io/saijsaij
 TOOLS_CACHE_VOLUME=wp-test-env-tools-cache
 
 # Every instance has the same administrator; instances are reachable only on the Docker network.
@@ -96,4 +98,20 @@ docker_tty_flags() {
     else
         echo "-i"
     fi
+}
+
+# image_hash <wordpress|tools>: hash of the files, paths and modes in docker/<image>/, the tag of the published image.
+image_hash() {
+    local directory="${WP_TEST_ENV_DIR}/docker/$1"
+    [[ -d "${directory}" ]] || fail "unknown image '$1'."
+    (
+        cd "${directory}" || exit 1
+        find . -type f -printf '%m %p\n' | LC_ALL=C sort
+        find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+    ) | sha256sum | cut -c1-16
+}
+
+# image_ref <wordpress|tools>: the published image matching the current docker/<image>/.
+image_ref() {
+    echo "${REGISTRY}/wp-test-env-$1:$(image_hash "$1")"
 }

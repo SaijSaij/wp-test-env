@@ -3,6 +3,8 @@
 # environment must not depend on it.
 FROM php:8.5-cli
 
+LABEL org.opencontainers.image.source=https://github.com/saijsaij/wp-test-env
+
 # GD and Imagick, like the official WordPress image, for build tools that process images (e.g. image
 # variants of a theme's assets): GD writes JPEG, PNG, WebP and AVIF; Imagick writes JPEG, PNG and WebP
 # (it reads AVIF, but Debian's libheif has no AVIF encoder).
