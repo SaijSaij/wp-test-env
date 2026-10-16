@@ -30,6 +30,8 @@ An instance runs in one of two modes:
 - **Dev mode** mounts the workspace read-only and links the given projects into `wp-content/themes` and `wp-content/plugins`, so the instance runs the checkouts.
 - **Release mode** has no workspace: it installs release ZIPs with WP-CLI, activates them (a child theme instead of its parent) and makes their directories read-only, like a deployment without write access; a write probe as the web server user must fail.
 
+Plugins can run without a theme of their own, in both modes: then the theme WordPress activates when it is installed stays active, `WP_DEFAULT_THEME` (Twenty Twenty-Five in WordPress 7.1).
+
 Every instance has the administrator `admin` with the password `password`, `WP_DEBUG` on (log to the container log), pretty permalinks and no automatic updates.
 
 ## Commands
@@ -40,7 +42,9 @@ Run from this directory.
 bin/build [--local] [--pull] [wordpress|tools]...   # provide the images, default both: pull the published ones, or build (--local always)
 bin/prepare [--link vendor/package=dir]... <project>...   # composer install, package links, npm ci, npm run build
 bin/up <instance> --theme <dir>... [--plugin <dir>]... --activate <theme slug> [options]     # dev mode
+bin/up <instance> --plugin <dir>... [options]                                                 # dev mode, default theme
 bin/up <instance> --theme-zip <zip> [--child-theme-zip <zip>] [--plugin-zip <zip>]... [options]   # release mode
+bin/up <instance> --plugin-zip <zip>... [options]                                             # release mode, default theme
 bin/down <instance>... | --all           # remove instances (and the network after the last one)
 bin/wp [-e NAME=value]... <instance> <wp arguments>...   # WP-CLI as www-data
 bin/exec [-u user] [-e NAME=value]... <instance> <command>...
@@ -84,12 +88,12 @@ pool theme-e2e                              # a pool; the keys below belong to i
 instances 3                                 # instances theme-e2e-1 … theme-e2e-3 (default 1)
 themes my-theme                             # dev mode: projects linked as themes …
 plugins my-plugin                           # … and plugins
-activate my-theme                           # slug (last path segment) of the theme to activate
+activate my-theme                           # slug (last path segment) of the theme to activate (with themes; without, the default theme stays)
 object-cache valkey                         # persistent object cache
 e2e my-theme                                # action: bin/e2e of the project on all instances of the pool
 
 pool theme-release-cli
-theme-zip my-theme/dist/my-theme-*.zip      # release mode; also child-theme-zip, plugin-zip (repeatable)
+theme-zip my-theme/dist/my-theme-*.zip      # release mode; also child-theme-zip, plugin-zip (repeatable; alone on the default theme)
 run my-theme/tests/cli/run {instance}       # action: command in the workspace root, {instance} replaced (instances 1)
 ```
 

@@ -17,13 +17,16 @@
 #   instances <n>                   number of instances (default 1): <name>-1 … <name>-<n>
 #   themes <dir>...                 dev mode: projects linked as themes
 #   plugins <dir>...                dev mode: projects linked as plugins
-#   activate <theme>                dev mode: slug (last path segment) of the theme to activate
+#   activate <theme>                dev mode: slug (last path segment) of the theme to activate (with themes)
 #   theme-zip <glob>                release mode: theme ZIP
 #   child-theme-zip <glob>          release mode: child theme ZIP
 #   plugin-zip <glob>               release mode: plugin ZIP (repeatable)
 #   object-cache valkey             persistent object cache
 #   e2e <project>                   action: bin/e2e of the project on all instances of the pool
 #   run <command>...                action: command with {instance} replaced (instances 1 only)
+#
+# A pool without a theme (only plugins, or only plugin-zip) runs on the theme WordPress
+# activates when it is installed (WP_DEFAULT_THEME, e.g. twentytwentyfive).
 #
 # A ZIP glob matching several files takes the highest version (sort -V), e.g. the
 # release just built by a tools line; the choice is printed.
@@ -153,11 +156,14 @@ for pool in "${pools[@]}"; do
     if [[ -n "${pool_run[${pool}]-}" && "${pool_instances[${pool}]}" != 1 ]]; then
         fail "${where}: run needs instances 1."
     fi
-    if [[ -n "${pool_theme_zip[${pool}]-}" ]]; then
+    if [[ -n "${pool_theme_zip[${pool}]-}${pool_child_zip[${pool}]-}${pool_plugin_zips[${pool}]-}" ]]; then
         [[ -z "${pool_themes[${pool}]-}${pool_plugins[${pool}]-}${pool_activate[${pool}]-}" ]] || fail "${where}: mixes release ZIPs with themes, plugins or activate."
+        [[ -z "${pool_child_zip[${pool}]-}" || -n "${pool_theme_zip[${pool}]-}" ]] || fail "${where}: child-theme-zip needs theme-zip, the parent theme."
+    elif [[ -n "${pool_themes[${pool}]-}" ]]; then
+        [[ -n "${pool_activate[${pool}]-}" ]] || fail "${where}: themes needs activate."
     else
-        [[ -n "${pool_themes[${pool}]-}" && -n "${pool_activate[${pool}]-}" ]] || fail "${where}: needs themes and activate, or theme-zip."
-        [[ -z "${pool_child_zip[${pool}]-}${pool_plugin_zips[${pool}]-}" ]] || fail "${where}: child-theme-zip and plugin-zip need theme-zip."
+        [[ -n "${pool_plugins[${pool}]-}" ]] || fail "${where}: needs themes and activate, plugins, or release ZIPs."
+        [[ -z "${pool_activate[${pool}]-}" ]] || fail "${where}: activate names one of the themes; without themes, the theme WordPress activates on installation stays active."
     fi
     while IFS= read -r instance; do
         all_instances+=("${instance}")
@@ -209,8 +215,10 @@ zip_of() {
 
 up_args() {
     local pool="$1" item
-    if [[ -n "${pool_theme_zip[${pool}]-}" ]]; then
-        echo --theme-zip; zip_of "${pool_theme_zip[${pool}]}"
+    if [[ -n "${pool_theme_zip[${pool}]-}${pool_plugin_zips[${pool}]-}" ]]; then
+        if [[ -n "${pool_theme_zip[${pool}]-}" ]]; then
+            echo --theme-zip; zip_of "${pool_theme_zip[${pool}]}"
+        fi
         if [[ -n "${pool_child_zip[${pool}]-}" ]]; then
             echo --child-theme-zip; zip_of "${pool_child_zip[${pool}]}"
         fi
@@ -218,13 +226,15 @@ up_args() {
             echo --plugin-zip; zip_of "${item}"
         done
     else
-        for item in ${pool_themes[${pool}]}; do
+        for item in ${pool_themes[${pool}]-}; do
             echo --theme; echo "${item}"
         done
         for item in ${pool_plugins[${pool}]-}; do
             echo --plugin; echo "${item}"
         done
-        echo --activate; echo "${pool_activate[${pool}]}"
+        if [[ -n "${pool_activate[${pool}]-}" ]]; then
+            echo --activate; echo "${pool_activate[${pool}]}"
+        fi
     fi
     if [[ -n "${pool_cache[${pool}]-}" ]]; then
         echo --object-cache; echo valkey

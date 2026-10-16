@@ -35,6 +35,6 @@ docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12   # after chang
 ## Definition of done for changes
 
 - `shellcheck` reports nothing (command above).
-- `bin/up` starts a dev instance and a release instance; in the release instance the write probe fails as expected; `bin/up` again replaces an instance of the same name.
+- `bin/up` starts a dev instance and a release instance, also with plugins only (default theme active); in the release instance the write probe fails as expected; `bin/up` again replaces an instance of the same name.
 - A run of `bin/run` with pool files of real projects passes twice in a row; afterwards `docker ps -a` shows no container and `docker network ls` no network of wp-test-env.
 - README, the usage comments of the scripts and `compose.yaml` describe the same commands, options and variables.

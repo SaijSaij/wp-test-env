@@ -5,9 +5,13 @@
 # Dev mode links projects of the workspace (read-only) and activates them; projects are
 # paths relative to the workspace, linked under their last path segment (the slug):
 #   bin/up <instance> --theme <dir>... [--plugin <dir>]... --activate <theme slug> [options]
+#   bin/up <instance> --plugin <dir>... [options]
 # Release mode installs release ZIPs, activates them (the child theme, if given) and
 # makes their directories read-only:
 #   bin/up <instance> --theme-zip <zip> [--child-theme-zip <zip>] [--plugin-zip <zip>]... [options]
+#   bin/up <instance> --plugin-zip <zip>... [options]
+# Without a theme, the theme WordPress activates when it is installed stays active
+# (WP_DEFAULT_THEME, e.g. twentytwentyfive).
 # Options of both modes:
 #   --object-cache valkey   persistent object cache (own Valkey per instance)
 #   --xdebug <mode>         XDEBUG_MODE (default off)
@@ -17,7 +21,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 usage() {
-    fail "Usage: bin/up <instance> (--theme <dir>... [--plugin <dir>]... --activate <theme> | --theme-zip <zip> [--child-theme-zip <zip>] [--plugin-zip <zip>]...) [--object-cache valkey] [--xdebug <mode>] [--env NAME=value]..."
+    fail "Usage: bin/up <instance> (--theme <dir>... [--plugin <dir>]... --activate <theme> | --plugin <dir>... | --theme-zip <zip> [--child-theme-zip <zip>] [--plugin-zip <zip>]... | --plugin-zip <zip>...) [--object-cache valkey] [--xdebug <mode>] [--env NAME=value]..."
 }
 
 [[ $# -ge 1 && "$1" != -* ]] || usage
@@ -51,12 +55,16 @@ while [[ $# -gt 0 ]]; do
     shift 2
 done
 
-if [[ -n "${theme_zip}" ]]; then
+if [[ -n "${theme_zip}" ]] || (( ${#plugin_zips[@]} > 0 )); then
     mode=release
     if (( ${#themes[@]} > 0 || ${#plugins[@]} > 0 )) || [[ -n "${activate}" ]]; then
-        fail "release mode (--theme-zip) cannot be combined with --theme, --plugin or --activate."
+        fail "release mode (--theme-zip, --plugin-zip) cannot be combined with --theme, --plugin or --activate."
     fi
-    zips=("${theme_zip}")
+    if [[ -n "${child_zip}" && -z "${theme_zip}" ]]; then
+        fail "--child-theme-zip needs --theme-zip, the parent theme."
+    fi
+    zips=()
+    [[ -z "${theme_zip}" ]] || zips+=("${theme_zip}")
     [[ -z "${child_zip}" ]] || zips+=("${child_zip}")
     zips+=("${plugin_zips[@]}")
     for zip in "${zips[@]}"; do
@@ -64,19 +72,24 @@ if [[ -n "${theme_zip}" ]]; then
     done
 else
     mode=dev
-    if [[ -n "${child_zip}" ]] || (( ${#plugin_zips[@]} > 0 )); then
-        fail "--child-theme-zip and --plugin-zip need --theme-zip."
+    if [[ -n "${child_zip}" ]]; then
+        fail "--child-theme-zip needs --theme-zip, the parent theme."
     fi
-    if (( ${#themes[@]} == 0 )) || [[ -z "${activate}" ]]; then
-        fail "dev mode needs --theme and --activate."
+    if (( ${#themes[@]} == 0 && ${#plugins[@]} == 0 )); then
+        fail "dev mode needs --theme and --activate, or --plugin."
     fi
     check_project_slugs --theme "${themes[@]}"
     check_project_slugs --plugin "${plugins[@]}"
-    theme_slugs=()
-    for project in "${themes[@]}"; do
-        theme_slugs+=("$(basename "${project}")")
-    done
-    [[ " ${theme_slugs[*]} " == *" ${activate} "* ]] || fail "--activate '${activate}' is not the slug of one of the --theme projects (${theme_slugs[*]})."
+    if (( ${#themes[@]} > 0 )); then
+        [[ -n "${activate}" ]] || fail "dev mode with --theme needs --activate."
+        theme_slugs=()
+        for project in "${themes[@]}"; do
+            theme_slugs+=("$(basename "${project}")")
+        done
+        [[ " ${theme_slugs[*]} " == *" ${activate} "* ]] || fail "--activate '${activate}' is not the slug of one of the --theme projects (${theme_slugs[*]})."
+    elif [[ -n "${activate}" ]]; then
+        fail "--activate names a --theme project; without --theme, the theme WordPress activates on installation stays active."
+    fi
 fi
 
 docker image inspect "${WORDPRESS_IMAGE}" >/dev/null 2>&1 || fail "image ${WORDPRESS_IMAGE} not found; run bin/build first."
@@ -154,7 +167,7 @@ install_theme() {
 }
 
 if [[ "${mode}" == "dev" ]]; then
-    wp theme activate "${activate}" >/dev/null
+    [[ -z "${activate}" ]] || wp theme activate "${activate}" >/dev/null
     plugin_slugs=()
     for project in "${plugins[@]}"; do
         plugin_slugs+=("$(basename "${project}")")
@@ -162,7 +175,7 @@ if [[ "${mode}" == "dev" ]]; then
     if (( ${#plugin_slugs[@]} > 0 )); then
         wp plugin activate "${plugin_slugs[@]}" >/dev/null
     fi
-else
+elif [[ -n "${theme_zip}" ]]; then
     # The parent theme first: WordPress would try to download a missing parent theme from wordpress.org.
     theme="$(install_theme "${theme_zip}")"
     if [[ -n "${child_zip}" ]]; then
@@ -177,6 +190,8 @@ else
         wp theme activate "${theme}" >/dev/null
     fi
     read_only "/var/www/html/wp-content/themes/${theme}"
+fi
+if [[ "${mode}" == "release" ]]; then
     for zip in "${plugin_zips[@]}"; do
         before="$(wp plugin list --field=name | sort)"
         wp plugin install "/release/$(basename "${zip}")" --activate >/dev/null
