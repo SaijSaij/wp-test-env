@@ -22,5 +22,4 @@ instance="$1"
 shift
 require_instance "${instance}"
 
-# shellcheck disable=SC2046 # docker_tty_flags prints one flag
-exec docker exec $(docker_tty_flags) -u "${user}" "${environment[@]}" "$(instance_container "${instance}")" "$@"
+exec docker exec "${DOCKER_TTY}" -u "${user}" "${environment[@]}" "$(instance_container "${instance}")" "$@"

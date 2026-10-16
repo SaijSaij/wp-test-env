@@ -125,14 +125,14 @@ ensure_network() {
     fi
 }
 
-# docker_tty_flags: -t only when both stdin and stdout are terminals (keeps output streams apart in scripts).
-docker_tty_flags() {
-    if [[ -t 0 && -t 1 ]]; then
-        echo "-it"
-    else
-        echo "-i"
-    fi
-}
+# DOCKER_TTY: the flags of docker run/exec, -t only when both stdin and stdout are terminals (keeps output
+# streams apart in scripts). Set when this file is sourced: a function called in $(…) would always see the pipe
+# of the command substitution as stdout and never allocate a terminal.
+if [[ -t 0 && -t 1 ]]; then
+    DOCKER_TTY=-it
+else
+    DOCKER_TTY=-i
+fi
 
 # image_hash <wordpress|tools>: hash of the files, paths and modes in docker/<image>/, the tag of the published image.
 image_hash() {

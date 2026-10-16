@@ -17,5 +17,4 @@ instance="$1"
 shift
 require_instance "${instance}"
 
-# shellcheck disable=SC2046 # docker_tty_flags prints one flag
-exec docker exec $(docker_tty_flags) -u www-data "${environment[@]}" "$(instance_container "${instance}")" wp "$@"
+exec docker exec "${DOCKER_TTY}" -u www-data "${environment[@]}" "$(instance_container "${instance}")" wp "$@"
