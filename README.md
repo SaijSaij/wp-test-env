@@ -23,7 +23,7 @@ WP_TEST_ENV_WORKSPACE=~/dev bin/run ~/dev/clients/site/tests/dev.pools
 
 ## Instances
 
-Every instance is a Compose project of its own (`wp-test-env-<instance>`) with WordPress (latest stable version, PHP 8.5, Apache, WP-CLI), MariaDB, Mailpit and, on request, Valkey as persistent object cache. Only the WordPress container joins the shared Docker network `wp-test-env`, as `http://<instance>.test`; test runners in that network (Playwright, see below) reach it there. Instances publish no host ports, so they run next to any development environment.
+Every instance is a Compose project of its own (`wp-test-env-<instance>`) with WordPress (latest stable version, PHP 8.5, Apache without persistent connections, WP-CLI), MariaDB, Mailpit and, on request, Valkey as persistent object cache. Only the WordPress container joins the shared Docker network `wp-test-env`, as `http://<instance>.test`; test runners in that network (Playwright, see below) reach it there. Instances publish no host ports, so they run next to any development environment.
 
 An instance runs in one of two modes:
 

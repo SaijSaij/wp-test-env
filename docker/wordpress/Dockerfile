@@ -18,6 +18,7 @@ RUN set -eux; \
     php -m | grep -qx 'redis'
 
 COPY php/test.ini "$PHP_INI_DIR/conf.d/zz-test.ini"
+COPY apache/zz-test.conf /etc/apache2/conf-enabled/zz-test.conf
 
 # Object cache drop-in of the Redis Object Cache plugin (pinned, with checksum); the
 # entrypoint copies it into wp-content when WP_OBJECT_CACHE is set. It uses the
