@@ -12,7 +12,8 @@
 #
 #   prepare <project>...            bin/prepare these projects (dev mode)
 #   link <vendor/package>=<dir>     package link for bin/prepare
-#   tools <dir> <command>...        command in the tools image, after prepare (e.g. a release build)
+#   tools <dir> <command>...        command in the tools image, after prepare (e.g. a release build); the
+#                                   commands of one pool file run in order, those of different files at the same time
 #   pool <name>                     starts a pool; the keys below belong to it
 #   instances <n>                   number of instances (default 1): <name>-1 … <name>-<n>
 #   themes <dir>...                 dev mode: projects linked as themes
@@ -55,6 +56,7 @@ done
 prepare_projects=()
 declare -A links=()
 tools_commands=()
+declare -A tools_file=()
 pools=()
 declare -A pool_file=() pool_instances=() pool_themes=() pool_plugins=() pool_activate=() \
     pool_theme_zip=() pool_child_zip=() pool_plugin_zips=() pool_cache=() pool_e2e=() pool_run=()
@@ -102,7 +104,10 @@ for file in "${files[@]}"; do
                 ;;
             tools)
                 (( ${#values[@]} >= 2 )) || fail "${where}: expected tools <dir> <command>..."
-                contains "${rest}" "${tools_commands[@]}" || tools_commands+=("${rest}")
+                if ! contains "${rest}" "${tools_commands[@]}"; then
+                    tools_commands+=("${rest}")
+                    tools_file[${rest}]="${file}"
+                fi
                 continue
                 ;;
             pool)
@@ -187,6 +192,19 @@ rm -rf "${RESULTS_DIR}/_up"
 mkdir -p "${RESULTS_DIR}/_up"
 
 "${WP_TEST_ENV_DIR}/bin/build" >/dev/null
+# The Playwright images of the browser tests, pulled while the projects are prepared and
+# the instances start.
+playwright_args=()
+for pool in "${pools[@]}"; do
+    if [[ -n "${pool_e2e[${pool}]-}" ]] && ! contains "${pool_e2e[${pool}]}" "${playwright_args[@]}"; then
+        playwright_args+=(--playwright "${pool_e2e[${pool}]}")
+    fi
+done
+playwright_pid=""
+if (( ${#playwright_args[@]} > 0 )); then
+    "${WP_TEST_ENV_DIR}/bin/build" "${playwright_args[@]}" > "${RESULTS_DIR}/_up/playwright.log" 2>&1 &
+    playwright_pid=$!
+fi
 if [[ "${skip_prepare}" == false ]]; then
     if (( ${#prepare_projects[@]} > 0 )); then
         link_args=()
@@ -196,11 +214,34 @@ if [[ "${skip_prepare}" == false ]]; then
         echo "== prepare: ${prepare_projects[*]}"
         "${WP_TEST_ENV_DIR}/bin/prepare" "${link_args[@]}" "${prepare_projects[@]}"
     fi
+    # The tools commands of each pool file in order; those of different pool files at the same time.
+    tools_files=()
     for command in "${tools_commands[@]}"; do
-        read -r -a words <<< "${command}"
-        echo "== tools: ${command}"
-        "${WP_TEST_ENV_DIR}/bin/tools" -w "${words[0]}" bash -c "${command#"${words[0]}"}"
+        contains "${tools_file[${command}]}" "${tools_files[@]}" || tools_files+=("${tools_file[${command}]}")
     done
+    tools_pids=()
+    for i in "${!tools_files[@]}"; do
+        (
+            for command in "${tools_commands[@]}"; do
+                [[ "${tools_file[${command}]}" == "${tools_files[i]}" ]] || continue
+                read -r -a words <<< "${command}"
+                echo "== tools: ${command}"
+                "${WP_TEST_ENV_DIR}/bin/tools" -w "${words[0]}" bash -c "${command#"${words[0]}"}"
+            done
+        ) > "${RESULTS_DIR}/_up/tools-${i}.log" 2>&1 &
+        tools_pids+=($!)
+    done
+    failed_tools=0
+    for i in "${!tools_pids[@]}"; do
+        if wait "${tools_pids[i]}"; then
+            cat "${RESULTS_DIR}/_up/tools-${i}.log"
+        else
+            echo "--- tools of ${tools_files[i]} failed (results/_up/tools-${i}.log):" >&2
+            cat "${RESULTS_DIR}/_up/tools-${i}.log" >&2
+            failed_tools=1
+        fi
+    done
+    (( failed_tools == 0 )) || fail "tools commands failed."
 fi
 
 # --- Start instances -------------------------------------------------------------
@@ -270,6 +311,11 @@ if (( ${#failed_up[@]} > 0 )); then
     fail "instances failed to start: ${failed_up[*]}"
 fi
 echo "   ready after $(( SECONDS - run_start )) s"
+
+if [[ -n "${playwright_pid}" ]] && ! wait "${playwright_pid}"; then
+    cat "${RESULTS_DIR}/_up/playwright.log" >&2
+    fail "pulling the Playwright images failed (results/_up/playwright.log)."
+fi
 
 # --- Run pools -------------------------------------------------------------------
 

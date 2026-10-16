@@ -149,3 +149,16 @@ image_hash() {
 image_ref() {
     echo "${REGISTRY}/wp-test-env-$1:$(image_hash "$1")"
 }
+
+# playwright_image <project>: the Playwright image of the project's @playwright/test version,
+# from node_modules or, before npm ci, from package-lock.json.
+playwright_image() {
+    local project="${WORKSPACE_DIR}/$1" version=""
+    if [[ -f "${project}/node_modules/@playwright/test/package.json" ]]; then
+        version="$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "${project}/node_modules/@playwright/test/package.json")"
+    elif [[ -f "${project}/package-lock.json" ]]; then
+        version="$(awk '/"node_modules\/@playwright\/test": \{/ { found = 1; next } found && /"version":/ { gsub(/[",]/, "", $2); print $2; exit }' "${project}/package-lock.json")"
+    fi
+    [[ -n "${version}" ]] || fail "cannot read the version of @playwright/test of $1 (node_modules or package-lock.json)."
+    echo "mcr.microsoft.com/playwright:v${version}-noble"
+}

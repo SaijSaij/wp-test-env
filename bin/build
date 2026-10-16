@@ -4,29 +4,55 @@
 # (built by .github/workflows/images.yml on every change and daily, so it carries
 # the latest stable WordPress); if that image is not published (e.g. docker/ was
 # changed locally), it builds it and says so. --local always builds. With the
-# wordpress image, the service images are pulled if missing.
+# wordpress image, the service images are pulled if missing. --playwright <project>
+# pulls the Playwright image of the project's @playwright/test version (as bin/e2e
+# runs it), from node_modules or, before npm ci, from package-lock.json; it is an
+# image of its own, so without wordpress or tools only that one is provided.
+# All images are pulled or built at the same time.
 # --pull updates the base images of local builds and the service images.
 #
-# Usage: bin/build [--local] [--pull] [wordpress|tools]...
+# Usage: bin/build [--local] [--pull] [wordpress|tools]... [--playwright <project>]...
 set -euo pipefail
 # shellcheck source=lib/common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-usage="Usage: bin/build [--local] [--pull] [wordpress|tools]..."
+usage="Usage: bin/build [--local] [--pull] [wordpress|tools]... [--playwright <project>]..."
 local_build=false
 pull=()
 images=()
-for argument in "$@"; do
-    case "${argument}" in
+playwright=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
         --local) local_build=true ;;
         --pull) pull=(--pull) ;;
-        wordpress | tools) images+=("${argument}") ;;
-        *) fail "unknown argument '${argument}'. ${usage}" ;;
+        wordpress | tools) images+=("$1") ;;
+        --playwright)
+            [[ $# -ge 2 ]] || fail "${usage}"
+            check_project_path project "$2"
+            playwright+=("$(playwright_image "$2")")
+            shift
+            ;;
+        *) fail "unknown argument '$1'. ${usage}" ;;
     esac
+    shift
 done
-(( ${#images[@]} > 0 )) || images=(wordpress tools)
+(( ${#images[@]} + ${#playwright[@]} > 0 )) || images=(wordpress tools)
 
-for image in "${images[@]}"; do
+# Every image in a job of its own; the output of each is kept and printed in order.
+logs="$(mktemp -d)"
+trap 'rm -rf "${logs}"' EXIT
+jobs_pids=()
+jobs_names=()
+start_job() {
+    local name="$1"
+    shift
+    "$@" > "${logs}/${#jobs_pids[@]}.log" 2>&1 &
+    jobs_pids+=($!)
+    jobs_names+=("${name}")
+}
+
+provide_image() {
+    local image="$1" name ref
     case "${image}" in
         wordpress) name="${WORDPRESS_IMAGE}" ;;
         tools) name="${TOOLS_IMAGE}" ;;
@@ -36,18 +62,41 @@ for image in "${images[@]}"; do
         if docker pull --quiet "${ref}" >/dev/null 2>&1; then
             docker tag "${ref}" "${name}"
             echo "${name}: pulled ${ref}"
-            continue
+            return
         fi
         echo "${name}: ${ref} is not published (or not reachable); building it locally." >&2
     fi
     docker build "${pull[@]}" -t "${name}" "${WP_TEST_ENV_DIR}/docker/${image}"
-done
+}
 
+pull_missing() {
+    local image="$1"
+    if (( ${#pull[@]} > 0 )) || ! docker image inspect "${image}" >/dev/null 2>&1; then
+        docker pull --quiet "${image}" >/dev/null
+    fi
+}
+
+for image in "${images[@]}"; do
+    start_job "${image}" provide_image "${image}"
+done
 # The service images of compose.yaml; pulled here once instead of by parallel bin/up runs.
 if [[ " ${images[*]} " == *" wordpress "* ]]; then
     for image in mariadb:lts axllent/mailpit:latest valkey/valkey:9.1-alpine; do
-        if (( ${#pull[@]} > 0 )) || ! docker image inspect "${image}" >/dev/null 2>&1; then
-            docker pull --quiet "${image}" >/dev/null
-        fi
+        start_job "${image}" pull_missing "${image}"
     done
 fi
+for image in "${playwright[@]}"; do
+    start_job "${image}" pull_missing "${image}"
+done
+
+failed=0
+for i in "${!jobs_pids[@]}"; do
+    if wait "${jobs_pids[i]}"; then
+        cat "${logs}/${i}.log"
+    else
+        echo "ERROR: providing ${jobs_names[i]} failed:" >&2
+        cat "${logs}/${i}.log" >&2
+        failed=1
+    fi
+done
+[[ "${failed}" == 0 ]] || fail "providing the images failed."
