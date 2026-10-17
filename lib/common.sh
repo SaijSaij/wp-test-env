@@ -24,7 +24,7 @@ NETWORK=wp-test-env
 WORDPRESS_IMAGE=wp-test-env-wordpress
 TOOLS_IMAGE=wp-test-env-tools
 # Published images (.github/workflows/images.yml), tagged with the hash of their docker/ directory.
-REGISTRY=ghcr.io/saijsaij
+REGISTRY=ghcr.io/webcodingcat
 TOOLS_CACHE_VOLUME=wp-test-env-tools-cache
 
 # Every instance has the same administrator; instances are reachable only on the Docker network.

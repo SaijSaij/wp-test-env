@@ -2,7 +2,7 @@
 
 Docker test environment for WordPress themes and plugins: fresh, isolated WordPress instances on demand, for browser tests, WP-CLI tests, release tests and benchmarks, many of them in parallel. Nothing persists: database, WordPress core and uploads live on tmpfs, and every instance is gone after its run. On the host only Docker and Bash are needed.
 
-It is the counterpart of a development environment such as [wp-dev-env](https://github.com/saijsaij/wp-dev-env): tests never touch the development site and its data.
+It is the counterpart of a development environment such as [wp-dev-env](https://github.com/webcodingcat/wp-dev-env): tests never touch the development site and its data.
 
 ## Layout
 
@@ -101,6 +101,6 @@ A ZIP glob that matches several files takes the highest version (`sort -V`), e.g
 
 ## Notes
 
-- **Images:** `bin/build` pulls `ghcr.io/saijsaij/wp-test-env-wordpress` and `-tools` with the tag that matches the checkout (a hash of the files in `docker/<image>/`) and tags them locally as `wp-test-env-wordpress` and `wp-test-env-tools`. The workflow `images.yml` publishes them on every change of `docker/` and daily, so they carry the latest stable WordPress (floating tag `php8.5-apache`) within a day. If the matching image is not published, e.g. after a local change of `docker/`, `bin/build` builds it and says so; `bin/build --local --pull` always builds with the latest base images. `bin/build --playwright <project>` pulls the Playwright image that `bin/e2e` runs for the project (its `@playwright/test` version from `node_modules` or, before `npm ci`, from `package-lock.json`). All images are pulled or built at the same time.
+- **Images:** `bin/build` pulls `ghcr.io/webcodingcat/wp-test-env-wordpress` and `-tools` with the tag that matches the checkout (a hash of the files in `docker/<image>/`) and tags them locally as `wp-test-env-wordpress` and `wp-test-env-tools`. The workflow `images.yml` publishes them on every change of `docker/` and daily, so they carry the latest stable WordPress (floating tag `php8.5-apache`) within a day. If the matching image is not published, e.g. after a local change of `docker/`, `bin/build` builds it and says so; `bin/build --local --pull` always builds with the latest base images. `bin/build --playwright <project>` pulls the Playwright image that `bin/e2e` runs for the project (its `@playwright/test` version from `node_modules` or, before `npm ci`, from `package-lock.json`). All images are pulled or built at the same time.
 - Instances are independent of each other; how many run well at once depends on the machine. Browsers are the main cost: a Chromium worker in the block editor needs about two CPU cores.
 - `state/` holds the Compose variables and release ZIPs of each running instance, `results/` the test results; both are ignored by Git.
